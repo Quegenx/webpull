@@ -140,7 +140,7 @@ const getScopePath = (pathname: string) => {
 	if (/\.\w+$/.test(pathname)) return pathname.replace(/\/[^/]*$/, "/")
 	if (pathname.endsWith("/")) return pathname
 	const segs = pathname.split("/").filter(Boolean)
-	return segs.length <= 1 ? pathname : `/${segs.slice(0, -1).join("/")}/`
+	return segs.length <= 1 ? "/" : `/${segs.slice(0, -1).join("/")}/`
 }
 
 const filterAndDedupe = (urls: string[], hosts: Set<string>, scope: string, max: number) => {
