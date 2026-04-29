@@ -2,6 +2,8 @@
 
 Pull any public docs site into local markdown files.
 
+> Fork of [Dhravya/webpull](https://github.com/Dhravya/webpull). Fixes a sitemap-scope bug so single-segment seed URLs (e.g. `https://example.com/introduction`) pull all sibling pages instead of just the seed page.
+
 ```
 $ webpull https://docs.example.com
 
@@ -16,6 +18,14 @@ $ webpull https://docs.example.com
 ```
 
 ## Install
+
+Install this fork directly from GitHub:
+
+```bash
+bun install -g github:Quegenx/webpull
+```
+
+Or install the upstream package from npm (without the fix):
 
 ```bash
 bun install -g webpull
