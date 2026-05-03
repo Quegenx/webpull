@@ -153,12 +153,21 @@ const crawl = (base: URL, max: number, scope: string) =>
 
 // --- Scoping ---
 
-const getScopePath = (pathname: string) => {
-	if (pathname === "/") return "/"
-	if (/\.\w+$/.test(pathname)) return pathname.replace(/\/[^/]*$/, "/")
-	if (pathname.endsWith("/")) return pathname
-	const segs = pathname.split("/").filter(Boolean)
-	return segs.length <= 1 ? "/" : `/${segs.slice(0, -1).join("/")}/`
+// Candidate scopes from narrowest to widest. The seed's own dir, every parent
+// dir up to root. Discovery picks whichever scope yields the most matches in
+// the sitemap/nav, so a deep seed like /a/b/c/d still finds siblings at /a/b/.
+const getScopeCandidates = (pathname: string): string[] => {
+	const seedDir = (() => {
+		if (pathname === "/" || pathname === "") return "/"
+		if (pathname.endsWith("/")) return pathname
+		if (/\.\w+$/.test(pathname)) return pathname.replace(/\/[^/]*$/, "/") || "/"
+		return `${pathname.replace(/\/$/, "")}/`
+	})()
+	const segs = seedDir.split("/").filter(Boolean)
+	const out: string[] = []
+	for (let i = segs.length; i > 0; i--) out.push(`/${segs.slice(0, i).join("/")}/`)
+	out.push("/")
+	return [...new Set(out)]
 }
 
 const filterAndDedupe = (urls: string[], hosts: Set<string>, scope: string, max: number) => {
@@ -198,14 +207,10 @@ export const discover = (baseUrl: string, max: number) =>
 		if (actual.href !== original.href) process.stderr.write(`  Resolved to ${actual.href}\n`)
 
 		const hosts = new Set([original.hostname, actual.hostname])
-		const scope = getScopePath(actual.pathname)
+		const scopeCandidates = getScopeCandidates(actual.pathname)
 
 		const origins = [...new Set([original.origin, actual.origin])]
-		// Walk up every parent path so a seed at /docs/api/foo finds sitemap.xml at /docs/api/, /docs/, and /
-		const seedDir = actual.pathname.replace(/\/[^/]*$/, "/") || "/"
-		const segs = seedDir.split("/").filter(Boolean)
-		const basePaths = new Set<string>(["/"])
-		for (let i = segs.length; i > 0; i--) basePaths.add(`/${segs.slice(0, i).join("/")}/`)
+		const basePaths = new Set<string>(["/", ...scopeCandidates])
 
 		const strategies: Effect.Effect<string[]>[] = []
 		for (const o of origins) {
@@ -220,27 +225,40 @@ export const discover = (baseUrl: string, max: number) =>
 
 		const results = yield* Effect.all(strategies, { concurrency: "unbounded" })
 
-		let best: string[] = []
+		const allUrls: string[] = []
 		for (const urls of results) {
-			if (!urls.length) continue
 			for (const u of urls) {
+				allUrls.push(u)
 				try {
 					hosts.add(new URL(u).hostname)
 				} catch {}
 			}
-			const filtered = filterAndDedupe(urls, hosts, scope, max)
-			if (filtered.length > best.length) best = filtered
 		}
 
-		if (best.length > 0) {
-			process.stderr.write(`  Found ${best.length} pages via sitemap\n`)
+		// Pick the scope that yields the most matches. Narrower scopes are tried
+		// first so we prefer the tightest scope that still captures the seed's
+		// section instead of accidentally pulling the whole site.
+		const pickBestScope = (urls: string[]) => {
+			let best = { scope: scopeCandidates[scopeCandidates.length - 1]!, urls: [] as string[] }
+			for (const cand of scopeCandidates) {
+				const filtered = filterAndDedupe(urls, hosts, cand, max)
+				if (filtered.length > best.urls.length) best = { scope: cand, urls: filtered }
+			}
 			return best
+		}
+
+		if (allUrls.length) {
+			const { urls: bestUrls } = pickBestScope(allUrls)
+			if (bestUrls.length) {
+				process.stderr.write(`  Found ${bestUrls.length} pages via sitemap\n`)
+				return bestUrls
+			}
 		}
 
 		process.stderr.write("  No sitemap, extracting from navigation...\n")
 		const nav = yield* extractNav(actual, html)
 		if (nav.length > 5) {
-			const filtered = filterAndDedupe(nav, hosts, scope, max)
+			const { urls: filtered } = pickBestScope(nav)
 			if (filtered.length > 0) {
 				process.stderr.write(`  Found ${filtered.length} pages from navigation\n`)
 				return filtered
@@ -248,5 +266,7 @@ export const discover = (baseUrl: string, max: number) =>
 		}
 
 		process.stderr.write("  Falling back to link crawling...\n")
-		return yield* crawl(actual, max, scope)
+		// Crawl from the seed's own dir so we don't traverse the whole site.
+		const crawlScope = scopeCandidates[0]!
+		return yield* crawl(actual, max, crawlScope)
 	})
