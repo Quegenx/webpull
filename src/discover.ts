@@ -235,16 +235,30 @@ export const discover = (baseUrl: string, max: number) =>
 			}
 		}
 
-		// Pick the scope that yields the most matches. Narrower scopes are tried
-		// first so we prefer the tightest scope that still captures the seed's
-		// section instead of accidentally pulling the whole site.
+		// Walk scopes narrow → wide. Keep widening only while the next scope's
+		// count is ≥1.5× the current scope's count (i.e. widening genuinely
+		// uncovers more of the seed's section). Stop the moment growth flattens
+		// — that flat boundary is where the seed's section ends and unrelated
+		// sections of the site begin (e.g. tanstack.com has /query/, /router/,
+		// /start/ — /query/latest/'s count ≈ /query/'s count, so we stop at
+		// /query/latest/ instead of pulling all of tanstack.com).
 		const pickBestScope = (urls: string[]) => {
-			let best = { scope: scopeCandidates[scopeCandidates.length - 1]!, urls: [] as string[] }
-			for (const cand of scopeCandidates) {
-				const filtered = filterAndDedupe(urls, hosts, cand, max)
-				if (filtered.length > best.urls.length) best = { scope: cand, urls: filtered }
+			// scopeCandidates is already narrow → wide (seed dir first, root last)
+			const counts = scopeCandidates.map((scope) => ({
+				scope,
+				urls: filterAndDedupe(urls, hosts, scope, max),
+			}))
+			let chosen = counts[0]!
+			for (let i = 1; i < counts.length; i++) {
+				const cur = counts[i]!
+				if (chosen.urls.length === 0) {
+					chosen = cur
+					continue
+				}
+				if (cur.urls.length >= chosen.urls.length * 1.5) chosen = cur
+				else break
 			}
-			return best
+			return chosen
 		}
 
 		if (allUrls.length) {
