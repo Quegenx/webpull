@@ -24,6 +24,22 @@ const fallbackExtract = (html: string) => {
 	return { title: t, content: el?.textContent?.replace(/\n{3,}/g, "\n\n").trim() ?? "" }
 }
 
+const SPA_SIGNATURES = /mintcdn\.com|__MINTLIFY|__NEXT_DATA__|window\.__OVERMIND_MUTATIONS|<div id="root"|<div id="__next"/i
+
+const tryRawMd = async (url: string) => {
+	if (/\.md(\?|$)/.test(url)) return null
+	const mdUrl = url.replace(/\/?(\?|#|$)/, ".md$1")
+	try {
+		const r = await fetch(mdUrl, { redirect: "follow", headers: { Accept: "text/markdown,text/plain" } })
+		if (!r.ok) return null
+		const txt = await r.text()
+		if (txt.startsWith("<") || !MARKDOWN_SIGNAL.test(txt)) return null
+		return { url: r.url.replace(/\.md(\?|#|$)/, "$1"), text: txt }
+	} catch {
+		return null
+	}
+}
+
 self.onmessage = async (e: MessageEvent<{ url: string }>) => {
 	const { url } = e.data
 	try {
@@ -41,6 +57,17 @@ self.onmessage = async (e: MessageEvent<{ url: string }>) => {
 			const title = text.match(/^#\s+(.+)$/m)?.[1]?.trim() || new URL(finalUrl).pathname
 			self.postMessage({ ok: true, url: finalUrl, title, content: text })
 			return
+		}
+
+		// Mintlify / SPA detection: server returned HTML shell with no real content.
+		// Many docs platforms expose a raw markdown twin at <url>.md — try that first.
+		if (SPA_SIGNATURES.test(text)) {
+			const raw = await tryRawMd(finalUrl)
+			if (raw) {
+				const title = raw.text.match(/^#\s+(.+)$/m)?.[1]?.trim() || new URL(raw.url).pathname
+				self.postMessage({ ok: true, url: raw.url, title, content: raw.text })
+				return
+			}
 		}
 
 		const cleaned = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "").replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")

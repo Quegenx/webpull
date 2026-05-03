@@ -58,6 +58,24 @@ const sitemapFromRobots = (origin: string) =>
 		return results.flat()
 	})
 
+// --- llms.txt (Mintlify, Fern, and others publish this) ---
+
+const fetchLlmsTxt = (url: string) =>
+	Effect.gen(function* () {
+		const r = yield* tryFetch(url)
+		if (!r) return []
+		// Reject HTML 404 pages dressed as 200
+		if (r.text.startsWith("<") || !r.text.includes("http")) return []
+		const urls: string[] = []
+		for (const m of r.text.matchAll(/\((https?:\/\/[^\s)]+)\)/g)) {
+			let u = m[1]!
+			// Strip trailing .md so the URL matches the rendered page; worker will re-add for raw fetch
+			u = u.replace(/\.md(#.*)?$/, "$1")
+			urls.push(u)
+		}
+		return urls
+	})
+
 // --- Nav extraction ---
 
 const extractNav = (base: URL, html: string) =>
@@ -183,7 +201,11 @@ export const discover = (baseUrl: string, max: number) =>
 		const scope = getScopePath(actual.pathname)
 
 		const origins = [...new Set([original.origin, actual.origin])]
-		const basePaths = [...new Set([actual.pathname.replace(/\/[^/]*$/, "/"), "/"])]
+		// Walk up every parent path so a seed at /docs/api/foo finds sitemap.xml at /docs/api/, /docs/, and /
+		const seedDir = actual.pathname.replace(/\/[^/]*$/, "/") || "/"
+		const segs = seedDir.split("/").filter(Boolean)
+		const basePaths = new Set<string>(["/"])
+		for (let i = segs.length; i > 0; i--) basePaths.add(`/${segs.slice(0, i).join("/")}/`)
 
 		const strategies: Effect.Effect<string[]>[] = []
 		for (const o of origins) {
@@ -192,6 +214,7 @@ export const discover = (baseUrl: string, max: number) =>
 				for (const name of ["sitemap.xml", "sitemap_index.xml", "sitemap-0.xml"]) {
 					strategies.push(fetchSitemap(`${o}${bp}${name}`))
 				}
+				strategies.push(fetchLlmsTxt(`${o}${bp}llms.txt`))
 			}
 		}
 
