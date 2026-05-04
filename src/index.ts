@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 import { cpus } from "node:os"
 import { resolve } from "node:path"
+import { mkdir } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import { Effect } from "effect"
 import { frontmatter } from "./convert"
 import { discover } from "./discover"
+import { extractOpenAPISpec, openAPIToMarkdownFiles } from "./openapi"
 import { WorkerPool } from "./pool"
 import { createUI } from "./ui"
 import { write } from "./write"
@@ -77,6 +80,22 @@ const parseArgs = (args: string[]): Config => {
 	return { url: url.href, out: resolve(out), max, exclude, include }
 }
 
+const openAPIFallback = async (seedUrl: string, outDir: string): Promise<boolean> => {
+	const res = await fetch(seedUrl, { redirect: "follow" })
+	if (!res.ok) return false
+	const html = await res.text()
+	const spec = extractOpenAPISpec(html)
+	if (!spec) return false
+	const files = openAPIToMarkdownFiles(spec, res.url || seedUrl)
+	process.stderr.write(`  Found inline OpenAPI spec, writing ${files.length} files\n`)
+	for (const f of files) {
+		const full = join(outDir, f.path)
+		await mkdir(dirname(full), { recursive: true })
+		await Bun.write(full, frontmatter(f.title, f.url) + f.content)
+	}
+	return true
+}
+
 const program = Effect.gen(function* () {
 	const config = parseArgs(process.argv.slice(2))
 	const t0 = performance.now()
@@ -91,6 +110,15 @@ const program = Effect.gen(function* () {
 			include: config.include,
 		})
 		if (!urls.length) {
+			process.stderr.write("  No pages found. Trying inline OpenAPI fallback...\n")
+			const ok = yield* Effect.tryPromise(() => openAPIFallback(config.url, config.out)).pipe(
+				Effect.catchAll(() => Effect.succeed(false)),
+			)
+			if (ok) {
+				const elapsed = ((performance.now() - t0) / 1000).toFixed(1)
+				process.stderr.write(`\n  \x1b[32m\x1b[1mDone!\x1b[0m via OpenAPI in ${elapsed}s\n\n`)
+				return
+			}
 			process.stderr.write("  No pages found.\n")
 			process.exit(1)
 		}
