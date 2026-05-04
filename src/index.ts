@@ -12,6 +12,8 @@ interface Config {
 	url: string
 	out: string
 	max: number
+	exclude?: RegExp
+	include?: RegExp
 }
 
 const parseArgs = (args: string[]): Config => {
@@ -21,8 +23,10 @@ const parseArgs = (args: string[]): Config => {
 
   Usage:  webpull <url> [options]
 
-    -o, --out <dir>   Output directory (default: ./<hostname>)
-    -m, --max <n>     Max pages (default: 500)
+    -o, --out <dir>      Output directory (default: ./<hostname>)
+    -m, --max <n>        Max pages (default: 500)
+    -e, --exclude <re>   Drop URLs whose path matches this regex
+    -i, --include <re>   Keep only URLs whose path matches this regex
 `)
 		process.exit(0)
 	}
@@ -40,6 +44,17 @@ const parseArgs = (args: string[]): Config => {
 
 	let out = `./${url.hostname}`
 	let max = 500
+	let exclude: RegExp | undefined
+	let include: RegExp | undefined
+
+	const compile = (pat: string, flag: string) => {
+		try {
+			return new RegExp(pat)
+		} catch (e) {
+			console.error(`Bad ${flag} regex: ${pat}`)
+			process.exit(1)
+		}
+	}
 
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i]
@@ -50,10 +65,16 @@ const parseArgs = (args: string[]): Config => {
 		} else if (("-m" === arg || "--max" === arg) && next) {
 			max = +next
 			i++
+		} else if (("-e" === arg || "--exclude" === arg) && next) {
+			exclude = compile(next, "--exclude")
+			i++
+		} else if (("-i" === arg || "--include" === arg) && next) {
+			include = compile(next, "--include")
+			i++
 		}
 	}
 
-	return { url: url.href, out: resolve(out), max }
+	return { url: url.href, out: resolve(out), max, exclude, include }
 }
 
 const program = Effect.gen(function* () {
@@ -65,7 +86,10 @@ const program = Effect.gen(function* () {
 	process.stderr.write(`\n  \x1b[1m⚡ webpull\x1b[0m \x1b[90m· discovering pages...\x1b[0m\n\n`)
 
 	try {
-		const urls = yield* discover(config.url, config.max)
+		const urls = yield* discover(config.url, config.max, {
+			exclude: config.exclude,
+			include: config.include,
+		})
 		if (!urls.length) {
 			process.stderr.write("  No pages found.\n")
 			process.exit(1)

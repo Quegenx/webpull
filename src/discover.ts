@@ -170,13 +170,26 @@ const getScopeCandidates = (pathname: string): string[] => {
 	return [...new Set(out)]
 }
 
-const filterAndDedupe = (urls: string[], hosts: Set<string>, scope: string, max: number) => {
+export interface DiscoverOptions {
+	exclude?: RegExp
+	include?: RegExp
+}
+
+const filterAndDedupe = (
+	urls: string[],
+	hosts: Set<string>,
+	scope: string,
+	max: number,
+	opts: DiscoverOptions = {},
+) => {
 	const seen = new Set<string>()
 	const out: string[] = []
 	for (const raw of urls) {
 		try {
 			const u = new URL(raw)
 			if (!hosts.has(u.hostname) || !u.pathname.startsWith(scope) || IGNORED.test(u.pathname)) continue
+			if (opts.exclude && opts.exclude.test(u.pathname)) continue
+			if (opts.include && !opts.include.test(u.pathname)) continue
 			u.hash = u.search = ""
 			if (!seen.has(u.pathname)) {
 				seen.add(u.pathname)
@@ -189,7 +202,7 @@ const filterAndDedupe = (urls: string[], hosts: Set<string>, scope: string, max:
 
 // --- Main ---
 
-export const discover = (baseUrl: string, max: number) =>
+export const discover = (baseUrl: string, max: number, opts: DiscoverOptions = {}) =>
 	Effect.gen(function* () {
 		const res = yield* Effect.tryPromise({
 			try: () => fetch(baseUrl, { redirect: "follow" }),
@@ -246,7 +259,7 @@ export const discover = (baseUrl: string, max: number) =>
 			// scopeCandidates is already narrow → wide (seed dir first, root last)
 			const counts = scopeCandidates.map((scope) => ({
 				scope,
-				urls: filterAndDedupe(urls, hosts, scope, max),
+				urls: filterAndDedupe(urls, hosts, scope, max, opts),
 			}))
 			let chosen = counts[0]!
 			for (let i = 1; i < counts.length; i++) {
@@ -280,7 +293,7 @@ export const discover = (baseUrl: string, max: number) =>
 		}
 
 		process.stderr.write("  Falling back to link crawling...\n")
-		// Crawl from the seed's own dir so we don't traverse the whole site.
 		const crawlScope = scopeCandidates[0]!
-		return yield* crawl(actual, max, crawlScope)
+		const crawled = yield* crawl(actual, max, crawlScope)
+		return filterAndDedupe(crawled, hosts, crawlScope, max, opts)
 	})
